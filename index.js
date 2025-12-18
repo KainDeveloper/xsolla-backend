@@ -3,47 +3,78 @@ import bodyParser from "body-parser";
 import crypto from "crypto";
 
 const app = express();
-app.use(bodyParser.json());
 
-const purchases = {}; // playerId -> [sku]
+// ВСТАВЬ СЮДА секретный ключ из Xsolla Webhooks (НЕ показывай его никому)
 const XSOLLA_SECRET = "ZSgSfJxWdeFe1dIpZ1fXQ";
+
+// Хранилище наград: playerId -> [{ sku, quantity }]
+const purchases = {};
+
+// Важно: сохраняем RAW body, иначе подпись не сойдётся
+app.use(
+  bodyParser.json({
+    verify: (req, res, buf) => {
+      req.rawBody = buf.toString("utf8");
+    },
+  })
+);
 
 app.get("/", (req, res) => res.send("Server is running"));
 
-app.post("/xsolla/webhook", (req, res) => {
-  const auth = req.headers["authorization"];
-  if (!auth) return res.status(401).send("No signature");
+function verifyXsollaSignature(req) {
+  const auth = req.headers["authorization"] || "";
+  const received = auth.replace(/^Signature\s+/i, "").trim().toLowerCase();
 
-  // Xsolla обычно присылает "Signature <hex>"
-  const received = auth.replace(/^Signature\s+/i, "").trim();
-
-  // Важно: хэш считается от "raw body". Для упрощения пока считаем от JSON строки.
-  // Этого может быть достаточно для старта, но если подпись не сойдётся — исправим на rawBody.
-  const payload = JSON.stringify(req.body);
-
+  // По доке: SHA1(rawBody + secretKey)
   const expected = crypto
-    .createHmac("sha256", XSOLLA_SECRET)
-    .update(payload)
-    .digest("hex");
+    .createHash("sha1")
+    .update((req.rawBody || "") + XSOLLA_SECRET, "utf8")
+    .digest("hex")
+    .toLowerCase();
 
-  if (received !== expected) {
+  return { ok: received && received === expected, received, expected };
+}
+
+app.post("/xsolla/webhook", (req, res) => {
+  const { ok, received, expected } = verifyXsollaSignature(req);
+  if (!ok) {
     console.log("Bad signature. received=", received, "expected=", expected);
     return res.status(403).send("Invalid signature");
   }
 
-  console.log("Verified webhook:", JSON.stringify(req.body));
+  const type = req.body?.notification_type;
+  console.log("Verified webhook type:", type);
 
-  const userId = req.body?.user?.id;
-  const sku = req.body?.item?.sku;
-  if (!userId || !sku) return res.status(400).send("Bad request");
+  // 1) Валидация пользователя (Xsolla ждёт JSON-ответ)
+  if (type === "user_validation") {
+    // Тут можно реально проверять пользователя в БД.
+    // Для MVP считаем, что любой user.id валидный.
+    return res.status(200).json({ result: true });
+  }
 
-  purchases[userId] ??= [];
-  purchases[userId].push(sku);
+  // 2) Оплаченный заказ — выдаём товары
+  if (type === "order_paid") {
+    const userId = req.body?.user?.external_id || req.body?.user?.id;
+    const items = req.body?.items || [];
 
-  res.status(200).send("OK");
+    if (!userId) return res.status(400).send("No user id");
+
+    purchases[userId] ??= [];
+
+    for (const it of items) {
+      const sku = it?.sku;
+      const quantity = Number(it?.quantity ?? 1);
+      if (sku) purchases[userId].push({ sku, quantity });
+    }
+
+    return res.status(200).send("OK");
+  }
+
+  // Остальные типы пока игнорируем, но отвечаем 200
+  return res.status(200).send("OK");
 });
 
-
+// Игра забирает награды
 app.get("/rewards", (req, res) => {
   const playerId = req.query.playerId;
   const items = purchases[playerId] ?? [];
