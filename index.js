@@ -116,7 +116,7 @@ app.get("/xsolla/token", async (req, res) => {
       }
     };
 
-    const url = `https://api.xsolla.com/v3/project/${PROJECT_ID}/admin/payment/token`;
+    const url = `https://store.xsolla.com/api/v3/project/${PROJECT_ID}/admin/payment/token`;
 
     const auth = Buffer.from(`${MERCHANT_ID}:${API_KEY}`).toString("base64");
 
