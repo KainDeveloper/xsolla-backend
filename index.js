@@ -84,7 +84,7 @@ app.get("/rewards", (req, res) => {
   res.json({ items });
 });
 
-// ====== Pay Station token: сервер получает токен у Xsolla и отдаёт Unity ======
+// ====== Pay Station token (для покупки товара) ======
 app.get("/xsolla/token", async (req, res) => {
   try {
     const playerId = req.query.playerId;
@@ -94,31 +94,28 @@ app.get("/xsolla/token", async (req, res) => {
       return res.status(400).json({ error: "playerId and sku required" });
     }
 
-    // Эти 3 значения добавь в Render -> Environment
     const MERCHANT_ID = process.env.XSOLLA_MERCHANT_ID;
-    const PROJECT_ID = process.env.XSOLLA_PROJECT_ID;
-    const API_KEY = process.env.XSOLLA_API_KEY;
+    const PROJECT_ID  = process.env.XSOLLA_PROJECT_ID;
+    const API_KEY     = process.env.XSOLLA_API_KEY;
 
     if (!MERCHANT_ID || !PROJECT_ID || !API_KEY) {
       return res.status(500).json({ error: "Xsolla env vars missing" });
     }
 
-    // Xsolla Merchant API: create token
-    const url = `https://api.xsolla.com/merchant/v2/merchants/${MERCHANT_ID}/token`;
-
-    // Минимальный payload
+    // ВАЖНО: для этого метода нужно ЛИБО user.country.value, ЛИБО заголовок X-User-Ip
+    // Для MVP — просто зададим страну.
     const body = {
       user: {
-        id: { value: playerId },
-      },
-      settings: {
-        project_id: Number(PROJECT_ID),
-        language: "en",
+        id: { value: String(playerId) },
+        country: { value: "US" } // потом сделаем динамически, если надо
       },
       purchase: {
-        items: [{ sku, quantity: 1 }],
-      },
+        items: [{ sku: String(sku), quantity: 1 }],
+        sandbox: true // тестовый режим
+      }
     };
+
+    const url = `https://api.xsolla.com/v3/project/${PROJECT_ID}/admin/payment/token`;
 
     const auth = Buffer.from(`${MERCHANT_ID}:${API_KEY}`).toString("base64");
 
@@ -126,7 +123,7 @@ app.get("/xsolla/token", async (req, res) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Basic ${auth}`,
+        "Authorization": `Basic ${auth}`,
       },
       body: JSON.stringify(body),
     });
@@ -139,14 +136,19 @@ app.get("/xsolla/token", async (req, res) => {
     }
 
     const data = JSON.parse(text);
-    if (!data.token) return res.status(500).json({ error: "No token in response" });
+
+    // обычно токен лежит в data.token
+    // если вдруг структура другая — просто вернем весь ответ, чтобы увидеть
+    if (!data.token) return res.json(data);
 
     return res.json({ token: data.token });
+
   } catch (e) {
     console.log("Token exception:", e);
     return res.status(500).json({ error: "token exception" });
   }
 });
+
 
 // ====== Run ======
 const PORT = process.env.PORT || 3000;
