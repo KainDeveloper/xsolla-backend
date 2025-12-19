@@ -109,10 +109,7 @@ app.get("/xsolla/token", async (req, res) => {
         country: { value: "US" } // для теста ок
       },
       purchase: {
-        items: [
-          { sku: String(sku), quantity: 1 }
-        ],
-        sandbox: true
+        items: [{ sku: String(sku), quantity: 1 }]
       }
     };
 
