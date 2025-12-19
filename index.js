@@ -84,7 +84,7 @@ app.get("/rewards", (req, res) => {
   res.json({ items });
 });
 
-// ====== Pay Station token (для покупки товара) ======
+// ====== Pay Station token (покупка товара по SKU) ======
 app.get("/xsolla/token", async (req, res) => {
   try {
     const playerId = req.query.playerId;
@@ -102,16 +102,17 @@ app.get("/xsolla/token", async (req, res) => {
       return res.status(500).json({ error: "Xsolla env vars missing" });
     }
 
-    // ВАЖНО: для этого метода нужно ЛИБО user.country.value, ЛИБО заголовок X-User-Ip
-    // Для MVP — просто зададим страну.
+    // ВАЖНО: этот метод требует user.country.value ИЛИ X-User-Ip
     const body = {
       user: {
         id: { value: String(playerId) },
-        country: { value: "US" } // потом сделаем динамически, если надо
+        country: { value: "US" } // для теста ок
       },
       purchase: {
-        items: [{ sku: String(sku), quantity: 1 }],
-        sandbox: true // тестовый режим
+        items: [
+          { sku: String(sku), quantity: 1 }
+        ],
+        sandbox: true
       }
     };
 
@@ -136,18 +137,13 @@ app.get("/xsolla/token", async (req, res) => {
     }
 
     const data = JSON.parse(text);
-
-    // обычно токен лежит в data.token
-    // если вдруг структура другая — просто вернем весь ответ, чтобы увидеть
-    if (!data.token) return res.json(data);
-
     return res.json({ token: data.token });
-
   } catch (e) {
     console.log("Token exception:", e);
     return res.status(500).json({ error: "token exception" });
   }
 });
+
 
 
 // ====== Run ======
