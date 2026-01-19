@@ -1,8 +1,31 @@
 import express from "express";
 import bodyParser from "body-parser";
 import crypto from "crypto";
+import pg from "pg";
+
 
 const app = express();
+
+// ====== Postgres (Cloud Saves) ======
+const { Pool } = pg;
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+async function ensureSaveTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS saves (
+      user_id TEXT PRIMARY KEY,
+      updated_at BIGINT NOT NULL,
+      data TEXT NOT NULL
+    );
+  `);
+}
+
+ensureSaveTable().catch((e) => console.log("DB init error:", e));
+
 
 // ====== Xsolla Webhooks Secret (из настроек Webhooks) ======
 const XSOLLA_SECRET = "ZSgSfJxWdeFe1dIpZ1fXQ";
@@ -141,6 +164,69 @@ app.get("/xsolla/token", async (req, res) => {
   }
 });
 
+// ====== Cloud Saves ======
+app.get("/save/:userId", async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const r = await pool.query(
+      "SELECT updated_at, data FROM saves WHERE user_id = $1",
+      [userId]
+    );
+
+    if (r.rowCount === 0) return res.status(404).json({ exists: false });
+
+    return res.json({
+      exists: true,
+      updatedAt: Number(r.rows[0].updated_at),
+      data: r.rows[0].data,
+    });
+  } catch (e) {
+    console.log("GET /save error:", e);
+    return res.status(500).json({ ok: false });
+  }
+});
+
+app.post("/save/:userId", async (req, res) => {
+  const { userId } = req.params;
+  const { updatedAt, data } = req.body || {};
+
+  if (typeof updatedAt !== "number" || typeof data !== "string") {
+    return res.status(400).json({ ok: false, error: "bad_request" });
+  }
+  if (data.length > 200_000) {
+    return res.status(413).json({ ok: false, error: "too_large" });
+  }
+
+  try {
+    const q = `
+      INSERT INTO saves (user_id, updated_at, data)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (user_id) DO UPDATE
+      SET updated_at = EXCLUDED.updated_at,
+          data = EXCLUDED.data
+      WHERE saves.updated_at < EXCLUDED.updated_at
+      RETURNING updated_at;
+    `;
+
+    const r = await pool.query(q, [userId, updatedAt, data]);
+
+    if (r.rowCount === 0) {
+      const cur = await pool.query("SELECT updated_at FROM saves WHERE user_id=$1", [userId]);
+      return res.status(409).json({
+        ok: false,
+        stored: false,
+        error: "older_than_server",
+        serverUpdatedAt: Number(cur.rows[0].updated_at),
+      });
+    }
+
+    return res.json({ ok: true, stored: true });
+  } catch (e) {
+    console.log("POST /save error:", e);
+    return res.status(500).json({ ok: false });
+  }
+});
 
 
 // ====== Run ======
